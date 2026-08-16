@@ -1,162 +1,76 @@
-# ShopMyHome — AI-Powered Shopify Product Lister
+# ShopMyHome
 
-Snap a photo of any product and let AI write the listing for you. ShopMyHome uses Claude's vision model to identify products, generate titles, descriptions, tags, and suggested pricing, then publishes directly to your Shopify store.
+Snap a photo of a product and get a ready-to-publish Shopify listing. ShopMyHome uses Claude's vision model to identify the item and draft a title, description, tags, and suggested price — you review, tweak, and publish straight to your store.
 
-## Features
+---
 
-- **Photo-to-listing** — Take or upload a product photo and get AI-generated listing details instantly
-- **AI analysis** — Claude Haiku identifies the product, writes a compelling description, suggests tags, category, key features, and an estimated price
-- **Editable drafts** — Review and tweak every field before publishing: title, description, price, tags, AI-identified features
-- **Shopify publishing** — Push products to Shopify as Draft, Active, or published to your Online Store sales channel
-- **History** — Every listing attempt is saved, with Shopify status tracking (pending / published / failed)
-- **Settings** — Securely store your Shopify store domain and access token per account
+## Why I built this
 
-## How it works
+A friend runs a thrifting and estate-sale business and was about to hire an assistant whose whole job would be: photograph items, write descriptions, and load them onto Shopify. Slow, repetitive, and exactly the kind of thing vision models are now good at.
 
-1. **Capture** — Pick or take a photo on the Capture tab
-2. **Analyze** — The image is sent to a Supabase Edge Function that calls Anthropic's Claude API for product recognition
-3. **Review** — Edit the AI-generated title, description, price, and tags
-4. **Publish** — The image is uploaded to Supabase Storage, then the product is created in Shopify via the Admin GraphQL API
-5. **Track** — The result is saved to your history with links back to Shopify
+So I said hold my beer — and built ShopMyHome in **24 hours** to do that job end to end: point your phone at an item, and it comes back as a drafted listing you can publish in a tap.
+
+It's a deliberately tight build — one real workflow, done properly — and a good demonstration of going from a real person's real problem to a working, deployable app fast, with the fiddly production concerns (auth, per-user isolation, third-party publishing) actually handled rather than hand-waved.
+
+---
+
+## What it does
+
+1. **Capture** — take or upload a product photo
+2. **Analyse** — Claude vision identifies the product and drafts title, description, tags, category, key features, and an estimated price
+3. **Review** — edit any field before publishing
+4. **Publish** — pushes to Shopify as Draft, Active, or live on your Online Store sales channel
+5. **Track** — every listing is saved to history with its Shopify status (pending / published / failed)
+
+---
+
+## How it's built
+
+A mobile-first Expo (React Native, web output) app with a Supabase backend and a Clerk-secured auth model.
+
+```
+Expo (React Native / web)  ──▶  Supabase Edge Functions (Deno)  ──▶  Claude vision  (product analysis)
+        │                                    │
+   Clerk auth (JWT)                          ├─▶  Supabase Storage   (product images)
+        │                                    └─▶  Shopify Admin GraphQL API  (publish)
+   Supabase (Postgres + RLS)
+```
+
+**Notable engineering decisions:**
+
+- **Clerk + Supabase hybrid auth** — Clerk handles identity; Supabase auth is disabled and used purely as database + storage. Every Supabase request carries the Clerk JWT as a Bearer token, and row-level security enforces per-user ownership via a `requesting_clerk_id()` DB function that reads the Clerk `sub` from the JWT.
+- **Per-user isolation** — both tables are RLS-scoped to `clerk_user_id`; storage write paths are forced to `{clerkUserId}/…` so users can't touch each other's images.
+- **Secrets stay server-side** — Anthropic key, Supabase service-role key, and each user's Shopify token live as edge-function secrets or per-user rows, never in the client bundle.
+- **Three edge functions** — `analyze-product` (Claude vision), `upload-product-image` (Storage), `shopify-create-product` (Shopify GraphQL) — each with its own JWT-verification strategy.
+
+---
 
 ## Tech stack
 
 | Layer | Technology |
 |---|---|
 | Frontend | Expo (React Native, web output), Expo Router, TypeScript |
-| Authentication | Clerk (`@clerk/clerk-expo`) |
-| Database & Storage | Supabase (Postgres, RLS, Storage bucket) |
-| Edge functions | Supabase Functions (Deno) |
-| AI | Anthropic Claude API (vision) |
+| Auth | Clerk (`@clerk/clerk-expo`) |
+| Database & Storage | Supabase (Postgres, RLS, Storage) |
+| Backend | Supabase Edge Functions (Deno) |
+| AI | Anthropic Claude (vision) |
 | E-commerce | Shopify Admin GraphQL API |
 
-## Architecture
+---
 
-### Auth: Clerk + Supabase hybrid
-
-Clerk handles all authentication. Supabase auth is disabled — it's used purely as a database and file store. Every Supabase request from the client carries the Clerk JWT as a Bearer token. Row-level security policies enforce per-user ownership using a `requesting_clerk_id()` DB function that reads the Clerk user ID from the JWT.
-
-### Edge functions
-
-All three functions run on Deno and share CORS headers.
-
-| Function | Purpose | Auth |
-|---|---|---|
-| `analyze-product` | Sends image to Claude, returns structured JSON | Full Clerk JWKS verification |
-| `upload-product-image` | Uploads image to Supabase Storage, returns public URL | Full Clerk JWKS verification |
-| `shopify-create-product` | Creates product in Shopify via GraphQL | JWT-decoded user ID + service-role DB scoping |
-
-### Database
-
-Two tables, both RLS-enabled and scoped to `clerk_user_id`:
-
-- **`products`** — one row per listing attempt (title, description, price, tags, image URL, Shopify product ID, status, Shopify URL)
-- **`app_settings`** — per-user key/value store for Shopify credentials
-
-A public-read Storage bucket (`product-images`) holds uploaded product photos, with write paths scoped to each user's Clerk ID.
-
-## Getting started
-
-### Prerequisites
-
-- Node.js 18+
-- An Expo account (for the build tooling)
-- A Clerk account and app (for authentication)
-- A Supabase project (for database, storage, and edge functions)
-- An Anthropic API key (for Claude vision analysis)
-- A Shopify store with Admin API access (for publishing)
-
-### Install
+## Run Locally
 
 ```bash
 npm install
+npm run dev          # Expo dev server (web)
+npm run build:web    # static web build → dist/
 ```
 
-### Environment variables
+Client env vars (`.env`): `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`, `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`.
+Edge-function secrets (set in Supabase): `ANTHROPIC_API_KEY`, `Clerk_JWKS_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`.
 
-Create a `.env` file in the project root:
+See [`CLAUDE.md`](./CLAUDE.md) for the full architecture guide.
 
-```
-EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=your-clerk-publishable-key
-```
+---
 
-Configure these as edge function secrets in Supabase:
-
-- `ANTHROPIC_API_KEY` — Anthropic API key
-- `Clerk_JWKS_URL` — Clerk JWKS URL (note: mixed case)
-- `SUPABASE_SERVICE_ROLE_KEY` — Supabase service role key
-- `SUPABASE_URL` — Supabase project URL
-
-### Run the dev server
-
-```bash
-npm run dev
-```
-
-### Build for web
-
-```bash
-npm run build:web
-```
-
-Output is written to `dist/`.
-
-## Scripts
-
-| Command | Description |
-|---|---|
-| `npm run dev` | Start the Expo dev server |
-| `npm run build:web` | Export a static web build to `dist/` |
-| `npm run lint` | Run Expo lint |
-| `npm run typecheck` | TypeScript check (no emit) |
-
-## Project structure
-
-```
-app/
-├── _layout.tsx              — Clerk provider + route guard
-├── +not-found.tsx           — 404 screen
-├── analyze.tsx              — AI analysis → edit → publish modal
-├── (auth)/
-│   ├── _layout.tsx          — Auth layout
-│   ├── sign-in.tsx          — Sign in screen
-│   └── sign-up.tsx          — Sign up screen
-└── (tabs)/
-    ├── _layout.tsx          — Tab bar + Supabase auth bridge
-    ├── index.tsx            — Capture tab (photo picker)
-    ├── history.tsx          — Past listings from Supabase
-    └── settings.tsx         — Shopify credential settings
-
-lib/
-├── api.ts                   — Edge function wrappers + image compression
-└── supabase.ts              — Supabase client + Clerk token bridge
-
-hooks/
-├── useFrameworkReady.ts     — Expo framework init
-└── useSupabaseAuth.ts       — Registers Clerk token getter with Supabase
-
-supabase/
-├── functions/
-│   ├── analyze-product/     — Claude vision API call
-│   ├── upload-product-image/ — Storage upload
-│   └── shopify-create-product/ — Shopify GraphQL mutation
-└── migrations/              — SQL migrations (tables, RLS, storage bucket)
-```
-
-## User flow
-
-1. Sign in or create an account
-2. Go to **Settings** and enter your Shopify store domain and access token
-3. On the **Capture** tab, take or upload a product photo
-4. AI analyzes the image and fills in product details
-5. Edit any field as needed, choose Draft / Active / Publish
-6. Tap **Publish to Shopify**
-7. View your listing history on the **History** tab
-
-## Notes
-
-- Images are compressed client-side (max 800px, 75% JPEG quality) before analysis to reduce payload size
-- The Shopify `publish` option sets the product to ACTIVE and pushes it to the Online Store sales channel; `active` sets it to ACTIVE without publishing to a channel; `draft` saves it as a Shopify draft
-- All database access is protected by row-level security scoped to each user's Clerk ID
+Built as proof of work by [Andrew Locke](https://www.linkedin.com/in/andrew-b-locke/) — Technical PM and founder of [Sabrulo](https://www.sabrulo.com/), an independent AI product & strategy practice.
