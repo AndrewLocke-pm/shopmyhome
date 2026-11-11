@@ -2,127 +2,136 @@
 
 Snap a photo of a product and get a ready-to-publish Shopify listing. ShopMyHome uses Claude's vision model to identify the item and draft a title, description, tags, and suggested price — you review, tweak, and publish straight to your store.
 
----
+ShopMyHome is a proof of concept that uses Claude vision to turn a photograph of a second-hand item into an editable Shopify product listing. It explores whether multimodal AI can eliminate repetitive cataloguing work for independent resellers.
 
-## Why I built this
-
-A friend runs a thrifting and estate-sale business and was about to hire an assistant whose whole job would be: photograph items, write descriptions, and load them onto Shopify. Slow, repetitive, and exactly the kind of thing vision models are now good at.
-
-So I said hold my beer — and built ShopMyHome in **24 hours** to do that job end to end: point your phone at an item, and it comes back as a drafted listing you can publish in a tap.
-
-It's a deliberately tight build — one real workflow, done properly — and a demonstration of going from a real person's real problem to a working, deployable app fast, with the fiddly production concerns (auth, per-user isolation, third-party publishing) actually handled rather than hand-waved.
+> **Status:** Functional proof of concept, not a production-ready product. The capture → AI draft → merchant review → Shopify integration workflow was implemented; customer time savings, commercial viability and production security have not been independently validated.
 
 ---
 
-## What it does
+## The problem
 
-| Step | Action |
-|---|---|
-| 📸 **Capture** | Take or upload a product photo |
-| 🧠 **Analyse** | Claude vision drafts title, description, tags, category, key features, and estimated price |
-| ✏️ **Review** | Edit any field before publishing |
-| 🚀 **Publish** | Push to Shopify as Draft, Active, or live on your Online Store |
-| 📋 **Track** | Every listing saved to history with Shopify status (pending / published / failed) |
+A friend running a thrift and estate-sale business was considering hiring an assistant to photograph items, write descriptions and enter products into Shopify. Each individual listing is straightforward, but the work is repeated across a large variety of one-off items.
 
----
+The question was not whether AI could write a description. It was whether a **single, usable workflow** could reduce the effort between photographing a physical item and preparing a Shopify listing.
 
-## How it's built
+## Hypothesis and experiment
 
-```
-Browser / Phone
-      │
-      ▼
-Expo (React Native / web)
-      │  Clerk JWT on every request
-      ▼
+**Hypothesis:** Combining image understanding, structured data extraction, human review and Shopify publishing could materially reduce manual listing effort.
+
+I built the core workflow in **24 hours** as a narrow experiment rather than starting with a broad inventory platform.
+
+The prototype demonstrates technical feasibility. It does **not** yet demonstrate a measured productivity improvement or sustainable standalone product demand.
+
+## What the prototype does
+
+1. **Capture:** Take or upload a photograph of an item.
+2. **Analyse:** Claude vision proposes a title, description, tags, category, features and price estimate.
+3. **Review:** The seller edits the proposed fields before submission.
+4. **Publish:** Create the product in Shopify as a draft or active product, with an option to publish to the Online Store channel.
+5. **Track:** Keep a local application history of listing attempts and Shopify outcomes.
+
+**Important:** Image-derived identification, product attributes and pricing are suggestions, not verified facts. Sellers must review condition, brand, measurements, authenticity and price.
+
+## Product decisions and trade-offs
+
+| Decision | Rationale | Trade-off |
+| --- | --- | --- |
+| Focus on one capture-to-listing workflow | Test the operational bottleneck quickly | No bulk catalogue workflow |
+| Use a multimodal foundation model | Avoid building a specialised item-recognition model | Generated details can be inaccurate |
+| Require merchant review | Keep humans accountable for product accuracy and publication | Not fully automated |
+| Publish through Shopify's API | Fit an existing merchant workflow rather than replace commerce infrastructure | Requires API access and careful credential security |
+| Build a dedicated interface | Explore a mobile-oriented seller experience | Adds application, authentication and maintenance overhead |
+
+## Could this be done natively instead?
+
+Yes, increasingly. Shopify Sidekick/Shopify Magic and existing Shopify photo-to-listing apps overlap with much of this functionality. A lightweight Shopify extension or a workflow using a vision model and Shopify's API may be a better implementation for a real merchant than maintaining a separate application.
+
+**Product lesson:** The value is not in generating product copy; it is in reducing total catalogue effort accurately and economically. A standalone product would need evidence of differentiated value — for example, handling one-off estate inventory, condition documentation, validated pricing, or batch review — before further investment.
+
+## Implementation overview
+
+```text
+Browser / phone
+      |
+      v
+Expo / React Native web UI + Clerk identity
+      |
+      v
 Supabase Edge Functions (Deno)
-      ├──▶ analyze-product        → Claude Vision API       → structured listing JSON
-      ├──▶ upload-product-image   → Supabase Storage        → image URL (per-user path)
-      └──▶ shopify-create-product → Shopify Admin GraphQL   → product draft / publish
+      |-- analyze-product ------> Claude vision -> listing proposal
+      |-- upload-product-image -> Supabase Storage
+      `-- shopify-create-product -> Shopify Admin GraphQL API
 
 Supabase Postgres (RLS)
-      └── listings + shopify_connections (both scoped to clerk_user_id)
+      `-- products + app_settings (Clerk user scoped)
 ```
 
-**Notable engineering decisions:**
-
-- **Clerk + Supabase hybrid auth** — Clerk handles identity; Supabase auth is disabled and used purely as database + storage. Every request carries the Clerk JWT as a Bearer token, and row-level security enforces per-user ownership via a `requesting_clerk_id()` DB function that reads the Clerk `sub` from the JWT.
-- **Per-user isolation** — both tables are RLS-scoped to `clerk_user_id`; storage write paths are forced to `{clerkUserId}/…` so users can't touch each other's data.
-- **Secrets stay server-side** — Anthropic key, Supabase service-role key, and each user's Shopify token live as edge-function secrets or per-user rows, never in the client bundle.
-- **Three edge functions** — `analyze-product`, `upload-product-image`, `shopify-create-product` — each verifies the JWT independently.
-
----
-
-## Tech stack
+### Tech stack
 
 | Layer | Technology |
-|---|---|
-| Frontend | Expo (React Native, web output), Expo Router, TypeScript |
-| Auth | Clerk (`@clerk/clerk-expo`) |
-| Database & Storage | Supabase (Postgres + RLS, Storage) |
+| --- | --- |
+| Front end | Expo, Expo Router, React Native, TypeScript |
+| Identity | Clerk |
 | Backend | Supabase Edge Functions (Deno) |
-| AI | Anthropic Claude (vision) |
-| E-commerce | Shopify Admin GraphQL API |
+| Persistence | Supabase Postgres with row-level security; Supabase Storage |
+| AI | Anthropic Claude vision |
+| Commerce | Shopify Admin GraphQL API |
 
----
+### Implementation notes
+
+- The application uses Clerk for identity and Supabase for data and storage.
+- Supabase RLS policies are intended to scope application records to a Clerk user ID.
+- Listing images are uploaded through an edge function; Shopify operations are performed server-side.
+- The application maintains `products` and `app_settings` tables, as documented in [`CLAUDE.md`](./CLAUDE.md).
+
+**Security and production-readiness limitation:** At the time of this documentation review, `CLAUDE.md` describes `shopify-create-product` as decoding the JWT without verifying its signature before looking up merchant credentials through a service-role client. That path must be audited and corrected before use with real multi-merchant credentials. Authentication, authorisation, credential storage and tenancy require proper testing. Do not treat this prototype as production hardened.
 
 ## Getting started
 
 ### Prerequisites
 
-| Requirement | Notes |
-|---|---|
-| Node.js 18+ | |
-| Expo CLI | `npm install -g expo-cli` |
-| [Anthropic](https://console.anthropic.com) account | Console → API Keys |
-| [Clerk](https://clerk.com) application | Dashboard → API Keys |
-| [Supabase](https://supabase.com) project | Project → Settings → API |
-| [Shopify](https://shopify.dev/docs/apps/build/custom-apps) custom app | Store admin → Apps → Develop apps |
+- Node.js and npm compatible with the checked-in Expo SDK and lockfile
+- Anthropic API key
+- Clerk application
+- Supabase project
+- Shopify store with appropriate Admin API access
 
-### 1. Clone and install
+### Install
 
 ```bash
-git clone https://github.com/your-username/shopmyhome.git
+git clone https://github.com/AndrewLocke-pm/shopmyhome.git
 cd shopmyhome
 npm install
 ```
 
-### 2. Client environment variables
+### Client configuration
 
-Create `.env` at the project root:
+Create a `.env` file with the appropriate public client configuration:
 
 ```env
 EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
+EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=your-clerk-publishable-key
 ```
 
-### 3. Edge function secrets
+Configure the required server-side secrets for the edge functions, including Anthropic, Supabase and Clerk JWKS settings. See [`CLAUDE.md`](./CLAUDE.md) and the deployed function configuration; the exact Clerk JWKS environment-variable casing should be checked against source before deployment.
 
-In Supabase → Settings → Edge Functions, add:
+**Never put an Anthropic key, Supabase service-role key or Shopify Admin token into an `EXPO_PUBLIC_` variable.**
 
-```
-ANTHROPIC_API_KEY
-CLERK_JWKS_URL          # https://your-clerk-domain/.well-known/jwks.json
-SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
-```
-
-### 4. Run
+### Run locally
 
 ```bash
-npm run dev          # Expo dev server (web)
-npm run build:web    # static web build → dist/
+npm run dev
 ```
 
-See [`CLAUDE.md`](./CLAUDE.md) for the full architecture guide, including edge function deployment and Shopify custom app setup.
+Other repository scripts:
 
----
+```bash
+npm run build:web
+npm run lint
+npm run typecheck
+```
 
-## Project status
-
-This is a **proof-of-concept** — the core workflow (capture → analyse → publish) is fully functional. Deliberately out of scope: multi-image listings, bulk upload, inventory management, pricing intelligence.
-
----
+The front end alone does not set up the three edge functions, database, storage policies or Shopify access. Review these dependencies before attempting a full deployment.
 
 Built as proof of work by [Andrew Locke](https://www.linkedin.com/in/andrew-b-locke/) — Technical PM and founder of [Sabrulo](https://www.sabrulo.com/), an independent AI product and strategy practice.
